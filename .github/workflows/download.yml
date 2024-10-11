@@ -39,6 +39,14 @@ jobs:
           dotnet-version: 8.0.x
           cache: true
 
+      - name: List files in current directory
+        # 列出当前目录中的所有文件，检查 accounts.json 文件是否存在
+        run: ls -alh
+
+      - name: Display accounts.json content
+        # 输出 accounts.json 文件内容，确保文件格式正确
+        run: cat accounts.json
+
       - name: Restore serverlist
         uses: actions/cache/restore@v4
         with:
