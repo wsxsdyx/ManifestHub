@@ -2,14 +2,14 @@
 
 on:
   schedule:
-    - cron: '0 */1 * * *'
+    - cron: '0 */1 * * *'  # 每小时触发一次工作流
 
   workflow_dispatch:
     inputs:
       account-concurrency:
         description: 'Account concurrency'
         required: true
-        default: 32
+        default: 8
         type: number
 
       manifest-concurrency:
@@ -32,7 +32,6 @@ jobs:
           submodules: true
           fetch-depth: 0
           fetch-tags: true
-          filter: blob:limit=100k
 
       - name: Setup dotnet
         uses: actions/setup-dotnet@v4
@@ -61,7 +60,8 @@ jobs:
         run: dotnet build --configuration Release
 
       - name: Download manifest
-        run: dotnet run --no-build --configuration Release -- download -t ${{ secrets.GITHUB_TOKEN }} -c ${{ github.event.inputs.account-concurrency || 32 }} -p ${{ github.event.inputs.manifest-concurrency || 8 }} -k ${{ secrets.AES_KEY }}
+        # 传递 --account 参数，指定 accounts.json 文件路径
+        run: dotnet run --no-build --configuration Release -- download -t ${{ secrets.GITHUB_TOKEN }} -c ${{ github.event.inputs.account-concurrency || 32 }} -p ${{ github.event.inputs.manifest-concurrency || 8 }} -k ${{ secrets.AES_KEY }} --account accounts.json
 
       - name: Save serverlist
         uses: actions/cache/save@v4
