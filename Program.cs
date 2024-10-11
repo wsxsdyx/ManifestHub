@@ -13,15 +13,15 @@ var result = Parser.Default.ParseArguments<Options>(args)
     {
         foreach (var error in errors)
         {
-            Console.WriteLine($"[Error] Argument Parsing Error: {error}");
+            Console.WriteLine($"[错误] 参数解析失败: {error}");
         }
         Environment.Exit(1);
     });
 
-Console.WriteLine($"[Info] Successfully parsed arguments. Mode: {result.Value.Mode}");
+Console.WriteLine($"[信息] 成功解析参数。模式: {result.Value.Mode}");
 
-var gdb = new GitDatabase(".", result.Value.Token ?? throw new NullReferenceException("[Error] Token not provided"),
-    result.Value.Key ?? throw new NullReferenceException("[Error] AES Key not provided"));
+var gdb = new GitDatabase(".", result.Value.Token ?? throw new NullReferenceException("[错误] 没有提供 Token"),
+    result.Value.Key ?? throw new NullReferenceException("[错误] 没有提供 AES Key"));
 
 var semaphore = new SemaphoreSlim(result.Value.ConcurrentAccount);
 var tasks = new ConcurrentBag<Task>();
@@ -33,13 +33,13 @@ switch (result.Value.Mode)
         var index = 0;
         var total = gdb.GetAccounts().Count();
 
-        Console.WriteLine($"[Info] Found {total} accounts to process.");
+        Console.WriteLine($"[信息] 找到 {total} 个待处理账号。");
 
         foreach (var accountInfo in gdb.GetAccounts(true))
         {
             await semaphore.WaitAsync();
 
-            Console.WriteLine($"[Info] [{index++}/{total}] Dispatching account: {accountInfo.AccountName}");
+            Console.WriteLine($"[信息] [{index++}/{total}] 正在处理账号: {accountInfo.AccountName}");
 
             tasks.Add(Task.Run(async () =>
             {
@@ -48,64 +48,77 @@ switch (result.Value.Mode)
                 {
                     await downloader.Connect().ConfigureAwait(false);
                     var info = await downloader.GetAccountInfo();
-                    Console.WriteLine($"[Info] Account {accountInfo.AccountName} connected successfully.");
+                    Console.WriteLine($"[信息] 账号 {accountInfo.AccountName} 连接成功。");
 
                     await gdb.WriteAccount(info);
-                    Console.WriteLine($"[Info] Account {accountInfo.AccountName} written to database.");
+                    Console.WriteLine($"[信息] 账号 {accountInfo.AccountName} 已写入数据库。");
 
                     await downloader.DownloadAllManifestsAsync(result.Value.ConcurrentManifest, gdb, writeTasks).ConfigureAwait(false);
-                    Console.WriteLine($"[Info] Manifests downloaded for account {accountInfo.AccountName}.");
+                    Console.WriteLine($"[信息] 已下载账号 {accountInfo.AccountName} 的所有 Manifest。");
                 }
                 catch (AuthenticationException e) when (e.Result is EResult.AccessDenied or EResult.AccountLogonDeniedVerifiedEmailRequired or EResult.AccountLoginDeniedNeedTwoFactor or EResult.AccountDisabled or EResult.InvalidPassword)
                 {
                     await gdb.RemoveAccount(accountInfo);
-                    Console.WriteLine($"[Warning] {e.Result} for {downloader.Username}. Account removed.");
+                    Console.WriteLine($"[警告] {e.Result} - 账号 {downloader.Username} 被移除。");
                 }
                 catch (Exception e)
                 {
-                    Console.WriteLine($"[Error] Exception for account {accountInfo.AccountName}: {e.Message}");
+                    Console.WriteLine($"[错误] 处理账号 {accountInfo.AccountName} 时发生异常: {e.Message}");
                 }
                 finally
                 {
                     await downloader.Disconnect();
-                    Console.WriteLine($"[Info] Account {accountInfo.AccountName} disconnected.");
+                    Console.WriteLine($"[信息] 账号 {accountInfo.AccountName} 已断开连接。");
                     semaphore.Release();
                 }
             }));
         }
 
         await Task.WhenAll(tasks);
-        Console.WriteLine("[Info] All download tasks completed. Waiting for write tasks...");
+        Console.WriteLine("[信息] 所有下载任务已完成。正在等待写入任务...");
         await Task.WhenAll(writeTasks);
 
-        Console.WriteLine("[Info] Start tag pruning...");
+        Console.WriteLine("[信息] 开始清理旧的标签...");
         await gdb.PruneExpiredTags();
 
-        Console.WriteLine("[Info] Writing summary...");
+        Console.WriteLine("[信息] 写入汇总信息...");
         var summaryPath = Environment.GetEnvironmentVariable("GITHUB_STEP_SUMMARY");
         if (summaryPath != null)
         {
             var summaryFile = File.OpenWrite(summaryPath);
             summaryFile.Write(Encoding.UTF8.GetBytes(gdb.ReportTrackingStatus()));
             summaryFile.Close();
-            Console.WriteLine("[Info] Summary written to GITHUB_STEP_SUMMARY.");
+            Console.WriteLine("[信息] 已将汇总信息写入 GITHUB_STEP_SUMMARY。");
         }
         else
         {
-            Console.WriteLine("[Warning] GITHUB_STEP_SUMMARY environment variable not found.");
+            Console.WriteLine("[警告] 找不到 GITHUB_STEP_SUMMARY 环境变量。");
         }
 
-        Console.WriteLine("[Info] Done.");
+        Console.WriteLine("[信息] 下载模式执行完毕。");
         break;
 
     case "account":
-        Console.WriteLine($"[Info] Processing account mode with file: {result.Value.Account}");
+        Console.WriteLine($"[信息] 进入账号模式，正在处理账号文件: {result.Value.Account}");
 
-        var raw = File.ReadAllText(result.Value.Account ?? throw new NullReferenceException("[Error] Account file path not provided."));
+        // 检查文件是否存在
+        if (!File.Exists(result.Value.Account))
+        {
+            Console.WriteLine($"[错误] 账号文件 '{result.Value.Account}' 不存在。");
+            Environment.Exit(1);
+        }
 
-        Console.WriteLine($"[Info] Read account file contents: {raw.Length} characters.");
+        var raw = File.ReadAllText(result.Value.Account);
+        Console.WriteLine($"[信息] 成功读取账号文件，文件长度: {raw.Length} 个字符。");
 
-        // Detect if the account file is encrypted
+        // 检查文件是否为空
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            Console.WriteLine("[错误] 账号文件内容为空。");
+            Environment.Exit(1);
+        }
+
+        // 检查是否为加密文件
         try
         {
             var dictionary = JsonConvert.DeserializeObject<Dictionary<string, string>>(raw);
@@ -117,11 +130,11 @@ switch (result.Value.Mode)
 
             var decryptedBytes = rsa.Decrypt(Convert.FromBase64String(encryptedAccount!), true);
             raw = Encoding.UTF8.GetString(decryptedBytes);
-            Console.WriteLine("[Info] Successfully decrypted account file.");
+            Console.WriteLine("[信息] 成功解密账号文件。");
         }
         catch (Exception e)
         {
-            Console.WriteLine($"[Error] Failed to decrypt account file: {e.Message}");
+            Console.WriteLine($"[警告] 解密账号文件失败: {e.Message}");
         }
 
         KeyValuePair<string, List<string?>>[] account;
@@ -129,12 +142,13 @@ switch (result.Value.Mode)
         try
         {
             var accountJson = JsonConvert.DeserializeObject<Dictionary<string, List<string?>>>(raw);
+            Console.WriteLine($"[调试] 解析后的账号 JSON 内容: {JsonConvert.SerializeObject(accountJson, Formatting.Indented)}");
             account = accountJson!.ToArray();
-            Console.WriteLine($"[Info] Successfully parsed {account.Length} accounts from the JSON file.");
+            Console.WriteLine($"[信息] 成功解析账号文件，共 {account.Length} 个账号。");
         }
         catch (Exception e)
         {
-            Console.WriteLine($"[Error] Failed to parse account JSON file: {e.Message}");
+            Console.WriteLine($"[错误] 解析账号 JSON 文件失败: {e.Message}");
             account = Array.Empty<KeyValuePair<string, List<string?>>>();
             Environment.Exit(1);
         }
@@ -155,7 +169,7 @@ switch (result.Value.Mode)
             }
 
             await semaphore.WaitAsync();
-            Console.WriteLine($"[Info] Dispatching account {account[i].Key}...");
+            Console.WriteLine($"[信息] 正在处理账号 {account[i].Key}...");
 
             tasks.Add(Task.Run(async () =>
             {
@@ -163,34 +177,34 @@ switch (result.Value.Mode)
                 {
                     await downloader.Connect().ConfigureAwait(false);
                     var info = await downloader.GetAccountInfo();
-                    Console.WriteLine($"[Info] Account {account[i].Key} connected successfully.");
+                    Console.WriteLine($"[信息] 账号 {account[i].Key} 连接成功。");
 
                     if (infoPrev == null || info.RefreshToken != infoPrev.RefreshToken)
                     {
                         await gdb.WriteAccount(info);
-                        Console.WriteLine($"[Info] Account {account[i].Key} written to database.");
+                        Console.WriteLine($"[信息] 账号 {account[i].Key} 已写入数据库。");
                     }
                 }
                 catch (Exception e)
                 {
-                    Console.WriteLine($"[Error] Exception for account {account[i].Key}: {e.Message}");
+                    Console.WriteLine($"[错误] 处理账号 {account[i].Key} 时发生异常: {e.Message}");
                 }
                 finally
                 {
                     await downloader.Disconnect();
-                    Console.WriteLine($"[Info] Account {account[i].Key} disconnected.");
+                    Console.WriteLine($"[信息] 账号 {account[i].Key} 已断开连接。");
                     semaphore.Release();
                 }
             }));
         }
 
         await Task.WhenAll(tasks);
-        Console.WriteLine("[Info] All account tasks completed.");
+        Console.WriteLine("[信息] 所有账号任务已完成。");
 
         break;
 
     default:
-        Console.WriteLine("[Error] Invalid mode of operation.");
+        Console.WriteLine("[错误] 无效的操作模式。");
         Environment.Exit(1);
         break;
 }
@@ -200,28 +214,28 @@ namespace ManifestHub
     [SuppressMessage("ReSharper", "UnusedAutoPropertyAccessor.Global")]
     internal class Options
     {
-        [Value(0, MetaName = "Mode", Default = "download", HelpText = "Mode of operation.")]
+        [Value(0, MetaName = "Mode", Default = "download", HelpText = "操作模式.")]
         public string? Mode { get; set; }
 
-        [Option('a', "account", Required = false, HelpText = "Account file.")]
+        [Option('a', "account", Required = false, HelpText = "账号文件.")]
         public string? Account { get; set; }
 
-        [Option('t', "token", Required = true, HelpText = "GitHub Access Token.")]
+        [Option('t', "token", Required = true, HelpText = "GitHub 访问令牌.")]
         public string? Token { get; set; }
 
-        [Option('c', "concurrent-account", Required = false, HelpText = "Concurrent account.", Default = 4)]
+        [Option('c', "concurrent-account", Required = false, HelpText = "同时处理的账号数量.", Default = 4)]
         public int ConcurrentAccount { get; set; }
 
-        [Option('p', "concurrent-manifest", Required = false, HelpText = "Concurrent manifest.", Default = 16)]
+        [Option('p', "concurrent-manifest", Required = false, HelpText = "同时处理的 Manifest 数量.", Default = 16)]
         public int ConcurrentManifest { get; set; }
 
-        [Option('i', "index", Required = false, HelpText = "Index of instance.", Default = 0)]
+        [Option('i', "index", Required = false, HelpText = "实例索引.", Default = 0)]
         public int Index { get; set; }
 
-        [Option('n', "number", Required = false, HelpText = "Number of instances.", Default = 1)]
+        [Option('n', "number", Required = false, HelpText = "实例数量.", Default = 1)]
         public int Number { get; set; }
 
-        [Option('k', "key", Required = false, HelpText = "Encryption key.")]
+        [Option('k', "key", Required = false, HelpText = "加密密钥.")]
         public string? Key { get; set; }
     }
 }
